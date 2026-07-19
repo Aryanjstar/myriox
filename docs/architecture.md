@@ -65,7 +65,7 @@ sequenceDiagram
     P-->>S: grid cells + entry/exit points
     S->>S: seed AgentState per persona/count, compile LangGraph
 
-    loop each tick (until all exited/stuck or MAX_TICKS=200)
+    loop each tick (until all exited/stuck or MAX_TICKS=60, or a 45s per-tick timeout)
         S->>AI: agent-reasoning deployment (per active agent)
         AI-->>S: intended move + short thought
         S->>S: GridValidator resolves legality/collisions

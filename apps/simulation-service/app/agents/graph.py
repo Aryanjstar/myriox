@@ -49,6 +49,11 @@ def _build_llm() -> AzureChatOpenAI:
         azure_deployment=settings.agent_reasoning_deployment,
         temperature=0.4,
         max_tokens=120,
+        # Bound worst-case per-tick latency: without an explicit timeout/retry cap, a
+        # throttled or slow Azure OpenAI call can stall a single tick for minutes, and with
+        # up to MAX_TICKS ticks per run that compounds into runs that appear to hang for hours.
+        timeout=20.0,
+        max_retries=1,
     )
 
 
@@ -143,10 +148,18 @@ def grid_validator_node(state: SimulationState) -> dict:
         elif not moved:
             new_status = "blocked"
             ticks_stuck += 1
-        else:
-            new_status = "moving" if direction != "wait" else "waiting"
-            ticks_stuck = 0 if (nx, ny) != (agent["x"], agent["y"]) else ticks_stuck
+        elif (nx, ny) != (agent["x"], agent["y"]):
+            new_status = "moving"
+            ticks_stuck = 0
             visited = (visited + [(nx, ny)])[-20:]
+        else:
+            # Agent chose (or defaulted to) "wait" and stayed put. This still counts toward
+            # the give-up counter — otherwise an agent that just keeps waiting is frozen at
+            # whatever ticks_stuck it already had and can never reach "stuck", which meant
+            # the run's early-exit check (all agents stuck) could never fire for it and every
+            # run burned its full tick budget even when nothing was actually happening.
+            new_status = "waiting"
+            ticks_stuck += 1
 
         if ticks_stuck >= MAX_STUCK_TICKS_BEFORE_GIVE_UP:
             new_status = "stuck"

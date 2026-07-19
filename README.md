@@ -45,14 +45,34 @@ flowchart LR
 5. The final report combines deterministic geometry checks with retrieved building-code
    clauses, cited by ID.
 
+## Models
+
+| Purpose | Deployment | Model | Capacity |
+|---|---|---|---|
+| Per-tick agent movement reasoning | `agent-reasoning` | `gpt-5.4-mini` | 150 (GlobalStandard) |
+| End-of-run compliance report synthesis | `report-synthesis` | `gpt-5.4` | 50 (GlobalStandard) |
+| Compliance clause vector search | `text-embedding-3-large` | `text-embedding-3-large` | 100 (Standard) |
+
+`agent-reasoning` stayed on `gpt-5.4-mini` rather than moving to a smaller/faster tier
+(e.g. `gpt-5.4-nano`): once the real bottleneck — a heavily under-provisioned deployment
+quota throttling concurrent per-tick calls — was fixed by raising capacity, per-call latency
+was already low enough (sub-second to ~1.5s per tick in production) that a smaller model
+wouldn't have moved the needle, and `mini` reasons more reliably about mobility-profile
+constraints than `nano` does. Revisit if agent counts grow much larger.
+
 ## Performance
 
 Every agent's move is a real Azure OpenAI call, dispatched concurrently across all active
-agents within a tick (not queued one-by-one). In practice: a handful of agents on a small,
-simple plan finish in a couple of minutes; a larger mix (5+ agents) on a bigger plan has
-taken 5-7 minutes end to end in our own test runs. This is an inherent tradeoff of giving
-every agent a real reasoning step instead of a scripted movement rule — we'd rather state
-that plainly than hide it.
+agents within a tick (not queued one-by-one), and the end-of-run compliance step fans out
+one concurrent call per distinct struggle point rather than looping through them serially.
+Measured against the live deployment after raising Azure OpenAI capacity (see "Models"
+above): a 2-agent run (1 rushed commuter, 1 wheelchair user) on the `library-1885` demo plan
+finished in **~17-19 seconds across ~19-23 ticks**; a 14-agent mix across all five personas on
+the same plan finished in **~45 seconds across 33 ticks**. Bigger, more open plans with more
+agents will still take proportionally longer — this is an inherent tradeoff of giving every
+agent a real reasoning step instead of a scripted movement rule, and we'd rather state that
+plainly than hide it — but runs no longer approach the multi-minute range for anything close
+to a typical demo-sized mix.
 
 ## Repository layout
 

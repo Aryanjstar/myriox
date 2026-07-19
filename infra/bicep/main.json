@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.44.1.10279",
-      "templateHash": "5207569155136873695"
+      "version": "0.45.15.27210",
+      "templateHash": "14731380958069635429"
     }
   },
   "parameters": {
@@ -145,6 +145,25 @@
     {
       "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
       "apiVersion": "2024-05-15",
+      "name": "[format('{0}/{1}/{2}', variables('cosmosName'), 'myriox', 'users')]",
+      "properties": {
+        "resource": {
+          "id": "users",
+          "partitionKey": {
+            "paths": [
+              "/email"
+            ],
+            "kind": "Hash"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', variables('cosmosName'), 'myriox')]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2024-05-15",
       "name": "[format('{0}/{1}/{2}', variables('cosmosName'), 'myriox', 'runs')]",
       "properties": {
         "resource": {
@@ -196,6 +215,11 @@
           },
           "indexingPolicy": {
             "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
             "vectorIndexes": [
               {
                 "path": "/embedding",
@@ -289,16 +313,16 @@
     {
       "type": "Microsoft.CognitiveServices/accounts/deployments",
       "apiVersion": "2024-10-01",
-      "name": "[format('{0}/{1}', variables('openAiName'), 'gpt-4o-mini')]",
+      "name": "[format('{0}/{1}', variables('openAiName'), 'agent-reasoning')]",
       "sku": {
-        "name": "Standard",
-        "capacity": 20
+        "name": "GlobalStandard",
+        "capacity": 150
       },
       "properties": {
         "model": {
           "format": "OpenAI",
-          "name": "gpt-4o-mini",
-          "version": "2024-07-18"
+          "name": "gpt-5.4-mini",
+          "version": "2026-03-17"
         }
       },
       "dependsOn": [
@@ -308,20 +332,20 @@
     {
       "type": "Microsoft.CognitiveServices/accounts/deployments",
       "apiVersion": "2024-10-01",
-      "name": "[format('{0}/{1}', variables('openAiName'), 'gpt-4o')]",
+      "name": "[format('{0}/{1}', variables('openAiName'), 'report-synthesis')]",
       "sku": {
-        "name": "Standard",
-        "capacity": 10
+        "name": "GlobalStandard",
+        "capacity": 50
       },
       "properties": {
         "model": {
           "format": "OpenAI",
-          "name": "gpt-4o",
-          "version": "2024-11-20"
+          "name": "gpt-5.4",
+          "version": "2026-03-05"
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('openAiName'), 'gpt-4o-mini')]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('openAiName'), 'agent-reasoning')]",
         "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiName'))]"
       ]
     },
@@ -331,7 +355,7 @@
       "name": "[format('{0}/{1}', variables('openAiName'), 'text-embedding-3-large')]",
       "sku": {
         "name": "Standard",
-        "capacity": 20
+        "capacity": 100
       },
       "properties": {
         "model": {
@@ -341,8 +365,8 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('openAiName'), 'gpt-4o')]",
-        "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiName'))]"
+        "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('openAiName'), 'report-synthesis')]"
       ]
     }
   ],

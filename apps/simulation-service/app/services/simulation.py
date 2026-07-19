@@ -6,6 +6,7 @@ the `plans` Cosmos container."""
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator
@@ -51,6 +52,7 @@ async def run_simulation(
     """Async generator yielding one tick summary dict at a time, for the WebSocket router
     to stream straight through. Also persists per-tick agent events and the final run
     document + compliance findings to Cosmos."""
+    run_started = time.monotonic()
     plan_item = await fetch_plan(org_id, plan_id)
     grid = GridWorld.from_plan(plan_item)
     graph = compile_simulation_graph()
@@ -68,7 +70,9 @@ async def run_simulation(
         "bottlenecks": [],
         "complianceFindings": [],
     }
-    runs_container().create_item(run_doc)
+    # Cosmos SDK calls are synchronous network I/O; run them off the event loop thread so a
+    # slow write never blocks the tick loop or other concurrent connections on this worker.
+    await asyncio.to_thread(runs_container().create_item, run_doc)
 
     state = {
         "run_id": run_id,
@@ -82,7 +86,20 @@ async def run_simulation(
     struggle_summaries: set[str] = set()
 
     for _ in range(MAX_TICKS):
-        state = await asyncio.to_thread(graph.invoke, state)
+        try:
+            # Hard ceiling on a single tick's wall-clock time. Without this, a stalled or
+            # heavily-throttled Azure OpenAI call inside graph.invoke() can block a tick
+            # indefinitely, which is what made runs appear to hang for hours instead of
+            # failing fast and surfacing an error to the client.
+            state = await asyncio.wait_for(
+                asyncio.to_thread(graph.invoke, state), timeout=45.0
+            )
+        except asyncio.TimeoutError:
+            state["agents"] = [
+                {**a, "status": "stuck"} if a["status"] not in ("exited", "stuck") else a
+                for a in state["agents"]
+            ]
+            break
 
         active = [a for a in state["agents"] if a["status"] != "exited"]
         for agent in state["agents"]:
@@ -109,6 +126,7 @@ async def run_simulation(
         tick_payload = {
             "run_id": run_id,
             "tick": state["tick"],
+            "elapsed_seconds": round(time.monotonic() - run_started, 1),
             "agents": [
                 {
                     "agent_id": a["agent_id"],
@@ -122,13 +140,19 @@ async def run_simulation(
             ],
         }
 
-        agent_events_container().create_item(
-            {
-                "id": str(uuid.uuid4()),
-                "orgId": org_id,
-                "runId": run_id,
-                **tick_payload,
-            }
+        # Persist the checkpoint in the background instead of awaiting it before streaming
+        # the tick to the client — the frontend doesn't need to wait on a Cosmos round-trip
+        # to see the next tick, and this call is fire-and-forget from the loop's perspective.
+        asyncio.create_task(
+            asyncio.to_thread(
+                agent_events_container().create_item,
+                {
+                    "id": str(uuid.uuid4()),
+                    "orgId": org_id,
+                    "runId": run_id,
+                    **tick_payload,
+                },
+            )
         )
         yield tick_payload
 
@@ -142,15 +166,19 @@ async def run_simulation(
         for (x, y), count in heat.most_common(25)
     ]
 
-    geometry_findings = deterministic_geometry_findings(
-        run_id, grid, plan_item.get("cell_size_meters", 1.0)
-    )
-    llm_findings = await asyncio.to_thread(
-        synthesize_llm_findings, run_id, list(struggle_summaries)
+    # Geometry findings are pure CPU (no LLM/network call) and don't depend on the LLM
+    # findings at all, so run both concurrently instead of paying their latency serially.
+    geometry_findings, llm_findings = await asyncio.gather(
+        asyncio.to_thread(
+            deterministic_geometry_findings, run_id, grid, plan_item.get("cell_size_meters", 1.0)
+        ),
+        synthesize_llm_findings(run_id, list(struggle_summaries)),
     )
     all_findings = geometry_findings + llm_findings
+    elapsed_seconds = round(time.monotonic() - run_started, 1)
 
-    runs_container().replace_item(
+    await asyncio.to_thread(
+        runs_container().replace_item,
         item=run_id,
         body={
             **run_doc,
@@ -158,7 +186,15 @@ async def run_simulation(
             "completedAt": datetime.now(timezone.utc).isoformat(),
             "bottlenecks": bottlenecks,
             "complianceFindings": all_findings,
+            "elapsedSeconds": elapsed_seconds,
         },
     )
 
-    yield {"run_id": run_id, "final": True, "bottlenecks": bottlenecks, "findings": all_findings}
+    yield {
+        "run_id": run_id,
+        "final": True,
+        "bottlenecks": bottlenecks,
+        "findings": all_findings,
+        "elapsed_seconds": elapsed_seconds,
+        "ticks": state["tick"],
+    }

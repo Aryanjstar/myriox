@@ -16,8 +16,8 @@ interface AuthContextValue {
   user: AuthUser | null;
   isLoaded: boolean;
   isSignedIn: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  signup: (params: { email: string; password: string; name: string; orgName: string }) => Promise<void>;
+  login: (email: string, password: string) => Promise<AuthUser>;
+  signup: (params: { email: string; password: string; name: string; orgName: string }) => Promise<AuthUser>;
   logout: () => void;
 }
 
@@ -42,11 +42,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const next = await authApi.login({ email, password });
         saveSession(next);
         setSession(next);
+        return next.user;
       },
       signup: async ({ email, password, name, orgName }) => {
         const next = await authApi.signup({ email, password, name, org_name: orgName });
         saveSession(next);
         setSession(next);
+        return next.user;
       },
       logout: () => {
         clearSession();

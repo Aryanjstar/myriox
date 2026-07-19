@@ -6,6 +6,7 @@ actually struggled with, keeping GPT-4.1/GPT-5-class calls to a minimum for cost
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -27,6 +28,8 @@ def _embeddings() -> AzureOpenAIEmbeddings:
         api_key=settings.azure_openai_api_key,
         api_version=settings.azure_openai_api_version,
         azure_deployment=settings.embedding_deployment,
+        timeout=20.0,
+        max_retries=1,
     )
 
 
@@ -38,6 +41,8 @@ def _report_llm() -> AzureChatOpenAI:
         api_version=settings.azure_openai_api_version,
         azure_deployment=settings.report_synthesis_deployment,
         temperature=0.2,
+        timeout=30.0,
+        max_retries=1,
     )
 
 
@@ -92,45 +97,63 @@ def rag_lookup_for_struggle_point(query_text: str, jurisdiction: str, top_k: int
     return items
 
 
-def synthesize_llm_findings(
+def _evaluate_struggle_point(
+    run_id: str, summary: str, jurisdiction: str, llm: AzureChatOpenAI
+) -> dict | None:
+    """Blocking work for a single struggle point: RAG lookup + one LLM call. Kept as a plain
+    sync function so it can be fanned out across a thread pool by the async caller below."""
+    try:
+        clauses = rag_lookup_for_struggle_point(summary, jurisdiction)
+    except Exception:
+        # A single bad vector-search call (e.g. missing index) shouldn't take down the
+        # whole report — skip retrieval for this struggle point and let the model
+        # reason without it rather than aborting the entire run.
+        clauses = []
+    prompt = (
+        "You are a building-code compliance auditor. An autonomous pedestrian simulation "
+        f"observed this struggle: \"{summary}\".\n"
+        f"Relevant code clauses retrieved via RAG: {json.dumps(clauses)}\n"
+        "If this struggle indicates a genuine code violation (not just ordinary crowding), "
+        'respond with strict JSON: {"is_violation": true, "code": "...", "description": "..."}. '
+        'Otherwise respond {"is_violation": false}.'
+    )
+    try:
+        response = llm.invoke([SystemMessage(content=prompt)])
+        parsed = json.loads(response.content)
+    except Exception:
+        parsed = {"is_violation": False}
+
+    if not parsed.get("is_violation"):
+        return None
+    return {
+        "id": str(uuid.uuid4()),
+        "run_id": run_id,
+        "cell_ref": {"x": 0, "y": 0},
+        "severity": "warning",
+        "code": parsed.get("code", "unknown"),
+        "description": parsed.get("description", summary),
+        "source_clause_id": clauses[0]["id"] if clauses else "unknown",
+    }
+
+
+async def synthesize_llm_findings(
     run_id: str, struggle_summaries: list[str], jurisdiction: str = "us_ada"
 ) -> list[dict]:
     """For struggle points that aren't caught by the deterministic geometry check (e.g. a
     delivery worker circling looking for a service elevator), ask the report model to reason
-    over retrieved code clauses and flag genuine compliance concerns vs. ordinary friction."""
+    over retrieved code clauses and flag genuine compliance concerns vs. ordinary friction.
+    Every struggle point is independent, so they're all dispatched concurrently across a
+    thread pool rather than one-by-one — this used to be a plain sequential for-loop, which
+    made the final report step's latency scale linearly with how many distinct struggle
+    points a run produced."""
     if not struggle_summaries:
         return []
 
     llm = _report_llm()
-    findings = []
-
-    for summary in struggle_summaries:
-        clauses = rag_lookup_for_struggle_point(summary, jurisdiction)
-        prompt = (
-            "You are a building-code compliance auditor. An autonomous pedestrian simulation "
-            f"observed this struggle: \"{summary}\".\n"
-            f"Relevant code clauses retrieved via RAG: {json.dumps(clauses)}\n"
-            "If this struggle indicates a genuine code violation (not just ordinary crowding), "
-            'respond with strict JSON: {"is_violation": true, "code": "...", "description": "..."}. '
-            'Otherwise respond {"is_violation": false}.'
+    results = await asyncio.gather(
+        *(
+            asyncio.to_thread(_evaluate_struggle_point, run_id, summary, jurisdiction, llm)
+            for summary in struggle_summaries
         )
-        try:
-            response = llm.invoke([SystemMessage(content=prompt)])
-            parsed = json.loads(response.content)
-        except Exception:
-            parsed = {"is_violation": False}
-
-        if parsed.get("is_violation"):
-            findings.append(
-                {
-                    "id": str(uuid.uuid4()),
-                    "run_id": run_id,
-                    "cell_ref": {"x": 0, "y": 0},
-                    "severity": "warning",
-                    "code": parsed.get("code", "unknown"),
-                    "description": parsed.get("description", summary),
-                    "source_clause_id": clauses[0]["id"] if clauses else "unknown",
-                }
-            )
-
-    return findings
+    )
+    return [finding for finding in results if finding is not None]

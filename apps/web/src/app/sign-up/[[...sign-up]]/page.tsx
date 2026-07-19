@@ -3,9 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { WelcomeDialog } from "@/components/auth/welcome-dialog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -22,20 +22,25 @@ export default function SignUpPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [welcomeName, setWelcomeName] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      await signup({ email, password, name, orgName });
-      toast.success(`Account created — signed in as ${email}`);
-      router.push("/dashboard");
+      const user = await signup({ email, password, name, orgName });
+      setWelcomeName(user.name);
     } catch (err) {
       setError(err instanceof AuthApiError ? err.message : "Something went wrong. Please try again.");
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function goToDashboard() {
+    setWelcomeName(null);
+    router.push("/dashboard");
   }
 
   return (
@@ -108,6 +113,16 @@ export default function SignUpPage() {
             Log in
           </Link>
         </p>
+
+        <WelcomeDialog
+          open={welcomeName !== null}
+          onOpenChange={(open) => {
+            if (!open) goToDashboard();
+          }}
+          name={welcomeName ?? ""}
+          mode="signed-up"
+          onContinue={goToDashboard}
+        />
       </Card>
     </div>
   );

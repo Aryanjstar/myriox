@@ -124,7 +124,7 @@ export function GridEditor() {
               <img
                 src={referenceImage}
                 alt="Reference floor plan being traced"
-                className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+                className="pointer-events-none absolute inset-0 h-full w-full object-contain"
                 style={{ opacity: imageOpacity }}
               />
             )}

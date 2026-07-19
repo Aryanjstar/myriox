@@ -22,6 +22,9 @@ export function SimulationRunner({ planId }: Props) {
   const [status, setStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [agents, setAgents] = useState<Record<string, LiveAgent>>({});
   const [tick, setTick] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [finalElapsedSeconds, setFinalElapsedSeconds] = useState<number | null>(null);
+  const [finalTicks, setFinalTicks] = useState<number | null>(null);
   const [bottlenecks, setBottlenecks] = useState<Bottleneck[]>([]);
   const [findings, setFindings] = useState<ComplianceFinding[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
@@ -41,6 +44,9 @@ export function SimulationRunner({ planId }: Props) {
     setBottlenecks([]);
     setFindings([]);
     setTick(0);
+    setElapsedSeconds(0);
+    setFinalElapsedSeconds(null);
+    setFinalTicks(null);
 
     const ws = new WebSocket(`${API_WS_URL}/api/simulations/ws`);
     wsRef.current = ws;
@@ -66,10 +72,13 @@ export function SimulationRunner({ planId }: Props) {
       if (data.final) {
         setBottlenecks(data.bottlenecks ?? []);
         setFindings(data.findings ?? []);
+        setFinalElapsedSeconds(data.elapsed_seconds ?? null);
+        setFinalTicks(data.ticks ?? null);
         setStatus("done");
         return;
       }
       setTick(data.tick);
+      if (typeof data.elapsed_seconds === "number") setElapsedSeconds(data.elapsed_seconds);
       setAgents((prev) => {
         const next = { ...prev };
         for (const a of data.agents) {
@@ -108,8 +117,19 @@ export function SimulationRunner({ planId }: Props) {
             </div>
           ))}
           <Button onClick={startSimulation} disabled={status === "running"} className="mt-2">
-            {status === "running" ? `Running... tick ${tick}` : "Run simulation"}
+            {status === "running" ? "Running..." : status === "done" ? "Run again" : "Run simulation"}
           </Button>
+          {status === "running" && (
+            <p className="text-center text-xs text-muted-foreground">
+              Tick {tick} · {elapsedSeconds.toFixed(1)}s elapsed
+            </p>
+          )}
+          {status === "done" && finalElapsedSeconds !== null && (
+            <p className="text-center text-xs text-muted-foreground">
+              Finished in {finalElapsedSeconds.toFixed(1)}s across {finalTicks} tick
+              {finalTicks === 1 ? "" : "s"}
+            </p>
+          )}
           {status === "error" && (
             <Badge variant="destructive">Simulation failed — check API logs</Badge>
           )}

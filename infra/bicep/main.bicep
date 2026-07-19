@@ -251,7 +251,10 @@ resource agentReasoningModel 'Microsoft.CognitiveServices/accounts/deployments@2
   name: 'agent-reasoning'
   sku: {
     name: 'GlobalStandard'
-    capacity: 20
+    // Raised from 20: per-tick agent reasoning fans out one call per active agent
+    // concurrently, and 20 units of GlobalStandard TPM was throttling under that
+    // concurrency, adding many seconds of retry latency to every tick.
+    capacity: 150
   }
   properties: {
     model: {
@@ -267,7 +270,7 @@ resource reportSynthesisModel 'Microsoft.CognitiveServices/accounts/deployments@
   name: 'report-synthesis'
   sku: {
     name: 'GlobalStandard'
-    capacity: 10
+    capacity: 50
   }
   properties: {
     model: {
@@ -286,7 +289,7 @@ resource embeddings 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01
   name: 'text-embedding-3-large'
   sku: {
     name: 'Standard'
-    capacity: 20
+    capacity: 100
   }
   properties: {
     model: {
